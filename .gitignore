@@ -1,0 +1,23 @@
+# Go binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# IDE-specific files
+.idea/
+.vscode/
+
+# Environment files
+.env
+.env.*
+!.env.example
+.env.local
+
+# Compiled binary from 'go build'
+sindtra
+server
