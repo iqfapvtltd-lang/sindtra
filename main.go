@@ -1,107 +1,234 @@
 package main
 
 import (
-	"encoding/json"
-	"fmt"
+	"context"
 	"log"
 	"net/http"
 	"os"
 
-	"github.com/GoogleCloudPlatform/golang-samples/run/helloworld/sellers"
-
-	"github.com/gorilla/mux"
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	supabase "github.com/nedpals/supabase-go"
+
+	"sindtra/sellers" // Import our local packages
 )
 
 var supabaseClient *supabase.Client
 
-// addAddressHandler handles the API request to add a new business address.
-func addAddressHandler(w http.ResponseWriter, r *http.Request) {
-	// 1. Decode the incoming JSON request body.
-	var address sellers.Address
-	err := json.NewDecoder(r.Body).Decode(&address)
-	if err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		log.Printf("Error decoding request body: %v", err)
-		return
-	}
-
-	// 2. Call the logic to save the address to Supabase.
-	savedAddress, err := sellers.AddAddress(r.Context(), supabaseClient, address)
-	if err != nil {
-		http.Error(w, "Failed to save address", http.StatusInternalServerError)
-		log.Printf("Error saving address: %v", err)
-		return
-	}
-
-	// 3. Send the newly created address (with ID) back to the client.
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(savedAddress)
-}
-
-// getAddressByIDHandler handles the API request to get a business address by its ID.
-func getAddressByIDHandler(w http.ResponseWriter, r *http.Request) {
-	// 1. Get the address ID from the URL path.
-	vars := mux.Vars(r)
-	id, ok := vars["id"]
-	if !ok {
-		http.Error(w, "Address ID is missing in URL", http.StatusBadRequest)
-		return
-	}
-
-	// 2. Call the logic to get the address from Supabase.
-	address, err := sellers.GetAddressByID(r.Context(), supabaseClient, id)
-	if err != nil {
-		// A common error here would be if the ID doesn't exist, which might be a 404 Not Found.
-		// For simplicity, we'll return a 500 Internal Server Error for any database-related failure.
-		http.Error(w, "Failed to get address", http.StatusInternalServerError)
-		log.Printf("Error getting address by ID: %v", err)
-		return
-	}
-
-	// 3. Send the address back to the client.
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(address)
-}
-
 func main() {
-	// Load .env.local file
-	// In a production environment like Render, we'll use environment variables directly,
-	// so we don't treat an error here as fatal.
-	if err := godotenv.Load(".env.local"); err != nil {
-		log.Println("Warning: .env.local file not found. Using environment variables.")
+	err := godotenv.Load(".env.local")
+	if err != nil {
+		log.Fatal("Error loading .env.local file")
 	}
 
-	// Initialize Supabase client
 	supabaseURL := os.Getenv("SUPABASE_URL")
 	supabaseKey := os.Getenv("SUPABASE_KEY")
-	if supabaseURL == "" || supabaseKey == "" {
-		log.Fatal("Error: SUPABASE_URL and SUPABASE_KEY must be set.")
-	}
 	supabaseClient = supabase.CreateClient(supabaseURL, supabaseKey)
-	if supabaseClient == nil {
-		log.Fatal("Failed to initialize Supabase client")
+
+	r := gin.Default()
+
+	// DEV: Using a temporary middleware for development that doesn't require a JWT
+	r.Use(devAuthMiddleware())
+	// r.Use(authMiddleware()) // PRODUCTION: This line should be used in production
+
+	// =========== Seller Profile Routes ===========
+	sellerRoutes := r.Group("/sellers")
+	{
+		// POST /sellers - Create a new seller profile
+		sellerRoutes.POST("/", handleAddSeller)
+		// GET /sellers - Get the current seller's profile
+		sellerRoutes.GET("/", handleGetSeller)
+
+		// =========== Business Information Routes for the seller ===========
+		bizInfoRoutes := sellerRoutes.Group("/business-information")
+		{
+			// POST /sellers/business-information - Add business info for the current seller
+			bizInfoRoutes.POST("/", handleAddBusinessInfo)
+			// GET /sellers/business-information - Get business info for the current seller
+			bizInfoRoutes.GET("/", handleGetBusinessInfo)
+			// PUT /sellers/business-information - Update business info for the current seller
+			bizInfoRoutes.PUT("/", handleUpdateBusinessInfo)
+			// DELETE /sellers/business-information - Delete business info for the current seller
+			bizInfoRoutes.DELETE("/", handleDeleteBusinessInfo)
+		}
 	}
 
-	fmt.Println("Successfully connected to Supabase!")
-
-	// Initialize router
-	r := mux.NewRouter()
-
-	// Define API endpoints
-	r.HandleFunc("/sellers/address", addAddressHandler).Methods("POST")
-	r.HandleFunc("/sellers/address/{id}", getAddressByIDHandler).Methods("GET")
-
-	// Start server - Modified for Render deployment
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // Default port for local development
+		port = "8080"
+	}
+	r.Run(":" + port)
+}
+
+// ================== TEMP DEV AUTH MIDDLEWARE ==================
+
+func devAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		// This is a temporary user ID for development purposes.
+		// Replace this with the actual user ID you want to test with.
+		testUserID := "69824941-fd32-4548-8c7e-83085a811d24"
+		c.Set("userID", testUserID)
+		c.Next()
+	}
+}
+
+// ================== AUTH MIDDLEWARE (FOR PRODUCTION) ==================
+
+func authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := c.GetHeader("Authorization")
+		if token == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization token required"})
+			c.Abort()
+			return
+		}
+
+		// Assumes Bearer token
+		const bearerPrefix = "Bearer "
+		if len(token) > len(bearerPrefix) {
+			token = token[len(bearerPrefix):]
+		}
+
+		ctx := context.Background()
+		user, err := supabaseClient.Auth.User(ctx, token)
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "details": err.Error()})
+			c.Abort()
+			return
+		}
+
+		// Set the user ID in the context for handlers to use
+		c.Set("userID", user.ID)
+		c.Next()
+	}
+}
+
+// ================== HANDLER FUNCTIONS ==================
+
+// ---- Seller Handlers ----
+
+func handleAddSeller(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "User ID is not a string"})
+		return
 	}
 
-	fmt.Printf("Server starting on port %s\n", port)
-	if err := http.ListenAndServe(":"+port, r); err != nil {
-		log.Fatal(err)
+	var sellerData map[string]interface{}
+	if err := c.ShouldBindJSON(&sellerData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
+		return
 	}
+
+	// Ensure the seller ID matches the authenticated user's ID
+	sellerData["id"] = userIDStr
+
+	createdSeller, err := sellers.AddSeller(c.Request.Context(), supabaseClient, sellerData)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create seller profile", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, createdSeller)
+}
+
+func handleGetSeller(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	userIDStr, _ := userID.(string)
+	parsedUserID, _ := uuid.Parse(userIDStr)
+
+	seller, err := sellers.GetSeller(c.Request.Context(), supabaseClient, parsedUserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get seller profile", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, seller)
+}
+
+// ---- Business Info Handlers ----
+
+func handleAddBusinessInfo(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	userIDStr, ok := userID.(string)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "User ID is not a string"})
+		return
+	}
+
+	var infoData map[string]interface{}
+	if err := c.ShouldBindJSON(&infoData); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
+		return
+	}
+
+	// Set the seller_id from the authenticated user
+	infoData["seller_id"] = userIDStr
+
+	createdInfo, err := sellers.AddBusinessInfo(c.Request.Context(), supabaseClient, infoData)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add business information", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, createdInfo)
+}
+
+func handleGetBusinessInfo(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	userIDStr, _ := userID.(string)
+	parsedUserID, _ := uuid.Parse(userIDStr)
+
+	info, err := sellers.GetBusinessInfo(c.Request.Context(), supabaseClient, parsedUserID)
+	if err != nil {
+		// Check for a specific error indicating no rows found, which is a valid case
+		if err.Error() == "PGRST116" { // Supabase code for no rows found
+			c.JSON(http.StatusNotFound, gin.H{"error": "No business information found for this seller"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get business information", "details": err.Error()})
+		}
+		return
+	}
+
+	c.JSON(http.StatusOK, info)
+}
+
+func handleUpdateBusinessInfo(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	userIDStr, _ := userID.(string)
+	parsedUserID, _ := uuid.Parse(userIDStr)
+
+	var updates map[string]interface{}
+	if err := c.ShouldBindJSON(&updates); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body", "details": err.Error()})
+		return
+	}
+
+	// Security: remove id and seller_id from updates to prevent hijacking
+	delete(updates, "id")
+	delete(updates, "seller_id")
+
+	updatedInfo, err := sellers.UpdateBusinessInfo(c.Request.Context(), supabaseClient, parsedUserID, updates)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update business information", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, updatedInfo)
+}
+
+func handleDeleteBusinessInfo(c *gin.Context) {
+	userID, _ := c.Get("userID")
+	userIDStr, _ := userID.(string)
+	parsedUserID, _ := uuid.Parse(userIDStr)
+
+	err := sellers.DeleteBusinessInfo(c.Request.Context(), supabaseClient, parsedUserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete business information", "details": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Business information deleted successfully"})
 }
