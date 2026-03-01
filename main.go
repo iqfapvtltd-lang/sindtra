@@ -36,16 +36,18 @@ func main() {
 
 	// ========== Initialize Firebase Admin SDK ==========
 	ctx := context.Background()
-	opt := option.WithCredentialsFile("firebase-service-account.json")
+	var opt option.ClientOption
 
-	if _, err := os.Stat("firebase-service-account.json"); os.IsNotExist(err) {
-		log.Println("firebase-service-account.json not found, trying GOOGLE_APPLICATION_CREDENTIALS_JSON env var.")
-		jsonCreds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
-		if jsonCreds == "" {
-			log.Fatal("Firebase credentials must be set in GOOGLE_APPLICATION_CREDENTIALS_JSON env var if file is not present.")
-		}
-		opt = option.WithCredentialsJSON([]byte(jsonCreds))
-	}
+    // Priority 1: Use environment variable for production (Render, etc.)
+	credentialsJSON := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+	if credentialsJSON != "" {
+		opt = option.WithCredentialsJSON([]byte(credentialsJSON))
+		log.Println("Initializing Firebase with credentials from environment variable.")
+	} else {
+        // Priority 2: Fallback to local file for IDX development
+        opt = option.WithCredentialsFile("firebase-service-account.json")
+		log.Println("Initializing Firebase with credentials from local file.")
+    }
 
 	app, err := firebase.NewApp(ctx, nil, opt)
 	if err != nil {
