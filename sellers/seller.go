@@ -4,13 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
 	supabase "github.com/nedpals/supabase-go"
 )
 
 // Seller represents a seller's profile linked to an authenticated user.
 type Seller struct {
-	ID           uuid.UUID `json:"id" db:"id"`
+	ID           string    `json:"id" db:"id"`
 	BusinessName string    `json:"business_name" db:"business_name"`
 	BusinessType string    `json:"business_type" db:"business_type"`
 	CreatedAt    string    `json:"created_at,omitempty" db:"created_at"`
@@ -34,9 +33,9 @@ func AddSeller(ctx context.Context, client *supabase.Client, sellerData map[stri
 }
 
 // GetSeller fetches the profile for the given seller ID. RLS should be active.
-func GetSeller(ctx context.Context, client *supabase.Client, sellerID uuid.UUID) (Seller, error) {
+func GetSeller(ctx context.Context, client *supabase.Client, sellerID string) (Seller, error) {
 	var result Seller
-	err := client.DB.From("sellers").Select("*").Single().Eq("id", sellerID.String()).Execute(&result)
+	err := client.DB.From("sellers").Select("*").Single().Eq("id", sellerID).Execute(&result)
 	if err != nil {
 		return Seller{}, fmt.Errorf("failed to fetch seller: %w", err)
 	}

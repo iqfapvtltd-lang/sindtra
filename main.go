@@ -3,25 +3,28 @@ package main
 
 import (
 	"context"
-    
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
+	firebase "firebase.google.com/go/v4"
+	"firebase.google.com/go/v4/auth"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	supabase "github.com/nedpals/supabase-go"
+	"google.golang.org/api/option"
 
-	"sindtra/sellers" // Import our local packages
+	"sindtra/sellers" // Re-importing our local packages
 )
 
 var (
-	supabaseClient *supabase.Client
-	redisClient    *redis.Client
+	supabaseClient     *supabase.Client
+	redisClient        *redis.Client
+	firebaseAuthClient *auth.Client
 )
 
 func main() {
@@ -31,59 +34,90 @@ func main() {
 		log.Println("Warning: .env.local file not found, relying on Render environment variables")
 	}
 
-	// Initialize Supabase client
+	// ========== Initialize Firebase Admin SDK ==========
+	ctx := context.Background()
+	opt := option.WithCredentialsFile("firebase-service-account.json")
+
+	if _, err := os.Stat("firebase-service-account.json"); os.IsNotExist(err) {
+		log.Println("firebase-service-account.json not found, trying GOOGLE_APPLICATION_CREDENTIALS_JSON env var.")
+		jsonCreds := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS_JSON")
+		if jsonCreds == "" {
+			log.Fatal("Firebase credentials must be set in GOOGLE_APPLICATION_CREDENTIALS_JSON env var if file is not present.")
+		}
+		opt = option.WithCredentialsJSON([]byte(jsonCreds))
+	}
+
+	app, err := firebase.NewApp(ctx, nil, opt)
+	if err != nil {
+		log.Fatalf("error initializing Firebase app: %v\n", err)
+	}
+
+	firebaseAuthClient, err = app.Auth(ctx)
+	if err != nil {
+		log.Fatalf("error getting Firebase Auth client: %v\n", err)
+	}
+	log.Println("Successfully connected to Firebase Auth")
+
+	// ========== Initialize Supabase client ==========
 	supabaseURL := os.Getenv("SUPABASE_URL")
 	supabaseKey := os.Getenv("SUPABASE_KEY")
 	if supabaseURL == "" || supabaseKey == "" {
 		log.Fatal("SUPABASE_URL and SUPABASE_KEY must be set")
 	}
 	supabaseClient = supabase.CreateClient(supabaseURL, supabaseKey)
+    log.Println("Successfully connected to Supabase")
 
-	// Initialize Upstash Redis client
+	// ========== Initialize Upstash Redis client ==========
 	redisURL := os.Getenv("UPSTASH_REDIS_URL")
 	if redisURL == "" {
-		log.Fatal("UPSTASH_REDIS_URL must be set")
-	}
-	opts, err := redis.ParseURL(redisURL)
-	if err != nil {
-		log.Fatalf("Could not parse Redis URL: %v", err)
-	}
+		log.Println("UPSTASH_REDIS_URL not set, Redis client not initialized.")
+	} else {
+        opts, err := redis.ParseURL(redisURL)
+        if err != nil {
+            log.Fatalf("Could not parse Redis URL: %v", err)
+        }
+        redisClient = redis.NewClient(opts)
+        if _, err := redisClient.Ping(context.Background()).Result(); err != nil {
+            log.Fatalf("Could not connect to Redis: %v", err)
+        }
+        log.Println("Successfully connected to Upstash Redis")
+    }
 
-	redisClient = redis.NewClient(opts)
-
-	// Ping Redis to check the connection
-	if _, err := redisClient.Ping(context.Background()).Result(); err != nil {
-		log.Fatalf("Could not connect to Redis: %v", err)
-	}
-	log.Println("Successfully connected to Upstash Redis")
-
-
-	// Setup Gin router
+	// ========== Setup Gin router ==========
 	r := gin.Default()
 
-	// DEV: Using a temporary middleware for development that doesn't require a JWT
-	r.Use(devAuthMiddleware())
-	// r.Use(authMiddleware()) // PRODUCTION: This line should be used in production
+	// Serve static files from the "public" directory
+	r.Static("/public", "./public")
 
-	// =========== Seller Profile Routes ===========
-	sellerRoutes := r.Group("/sellers")
+	// Redirect root to the main login/index page
+	r.GET("/", func(c *gin.Context) {
+		c.Redirect(http.StatusMovedPermanently, "/public/index.html")
+	})
+
+	// All routes under "/api" will be protected by Firebase Auth
+	apiRoutes := r.Group("/api")
+	apiRoutes.Use(firebaseAuthMiddleware())
 	{
-		// POST /sellers - Create a new seller profile
-		sellerRoutes.POST("/", handleAddSeller)
-		// GET /sellers - Get the current seller's profile
-		sellerRoutes.GET("/", handleGetSeller)
-
-		// =========== Business Information Routes for the seller ===========
-		bizInfoRoutes := sellerRoutes.Group("/business-information")
+		// =========== Seller Profile Routes ===========
+		sellerRoutes := apiRoutes.Group("/sellers")
 		{
-			// POST /sellers/business-information - Add business info for the current seller
-			bizInfoRoutes.POST("/", handleAddBusinessInfo)
-			// GET /sellers/business-information - Get business info for the current seller
-			bizInfoRoutes.GET("/", handleGetBusinessInfo)
-			// PUT /sellers/business-information - Update business info for the current seller
-			bizInfoRoutes.PUT("/", handleUpdateBusinessInfo)
-			// DELETE /sellers/business-information - Delete business info for the current seller
-			bizInfoRoutes.DELETE("/", handleDeleteBusinessInfo)
+			// POST /api/sellers - Create a new seller profile
+			sellerRoutes.POST("/", handleAddSeller)
+			// GET /api/sellers - Get the current seller's profile
+			sellerRoutes.GET("/", handleGetSeller)
+
+			// =========== Business Information Routes for the seller ===========
+			bizInfoRoutes := sellerRoutes.Group("/business-information")
+			{
+				// POST /api/sellers/business-information - Add business info for the current seller
+				bizInfoRoutes.POST("/", handleAddBusinessInfo)
+				// GET /api/sellers/business-information - Get business info for the current seller
+				bizInfoRoutes.GET("/", handleGetBusinessInfo)
+				// PUT /api/sellers/business-information - Update business info for the current seller
+				bizInfoRoutes.PUT("/", handleUpdateBusinessInfo)
+				// DELETE /api/sellers/business-information - Delete business info for the current seller
+				bizInfoRoutes.DELETE("/", handleDeleteBusinessInfo)
+			}
 		}
 	}
 
@@ -91,47 +125,44 @@ func main() {
 	if port == "" {
 		port = "8080"
 	}
+	log.Printf("\033[1;36m%s\033[0m", "\n🚀 Server starting on http://localhost:"+port)
 	r.Run(":" + port)
 }
 
-// ================== TEMP DEV AUTH MIDDLEWARE ==================
-func devAuthMiddleware() gin.HandlerFunc {
+// ================== FIREBASE AUTH MIDDLEWARE ==================
+func firebaseAuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		testUserID := "69824941-fd32-4548-8c7e-83085a811d24"
-		c.Set("userID", testUserID)
-		c.Next()
-	}
-}
-
-// ================== AUTH MIDDLEWARE (FOR PRODUCTION) ==================
-func authMiddleware() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		token := c.GetHeader("Authorization")
-		if token == "" {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization token required"})
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization header is required"})
 			c.Abort()
 			return
 		}
 
-		const bearerPrefix = "Bearer "
-		if len(token) > len(bearerPrefix) {
-			token = token[len(bearerPrefix):]
+		// The token is expected to be in the format "Bearer <token>"
+		idToken := strings.TrimSpace(strings.Replace(authHeader, "Bearer", "", 1))
+		if idToken == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization token is missing"})
+			c.Abort()
+			return
 		}
 
-		ctx := context.Background()
-		user, err := supabaseClient.Auth.User(ctx, token)
+		// Verify the ID token
+		token, err := firebaseAuthClient.VerifyIDToken(c, idToken)
 		if err != nil {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token", "details": err.Error()})
+			log.Printf("Error verifying Firebase ID token: %v\n", err)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired authorization token"})
 			c.Abort()
 			return
 		}
 
-		c.Set("userID", user.ID)
+		// Set the user's Firebase UID in the context for downstream handlers
+		c.Set("userID", token.UID)
 		c.Next()
 	}
 }
 
-// ================== HANDLER FUNCTIONS ==================
+// ================== HANDLER FUNCTIONS (Original Logic Preserved) ==================
 
 // ---- Seller Handlers ----
 func handleAddSeller(c *gin.Context) {
@@ -162,9 +193,8 @@ func handleAddSeller(c *gin.Context) {
 func handleGetSeller(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	userIDStr, _ := userID.(string)
-	parsedUserID, _ := uuid.Parse(userIDStr)
 
-	seller, err := sellers.GetSeller(c.Request.Context(), supabaseClient, parsedUserID)
+	seller, err := sellers.GetSeller(c.Request.Context(), supabaseClient, userIDStr)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get seller profile", "details": err.Error()})
 		return
@@ -197,8 +227,10 @@ func handleAddBusinessInfo(c *gin.Context) {
 	}
     
     // Invalidate cache after adding new info
-    cacheKey := "business_info:" + userIDStr
-    redisClient.Del(c.Request.Context(), cacheKey)
+    if redisClient != nil {
+        cacheKey := "business_info:" + userIDStr
+        redisClient.Del(c.Request.Context(), cacheKey)
+    }
 
 	c.JSON(http.StatusCreated, createdInfo)
 }
@@ -207,29 +239,30 @@ func handleGetBusinessInfo(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	userIDStr, _ := userID.(string)
 	ctx := c.Request.Context()
-	cacheKey := "business_info:" + userIDStr
-
-	// 1. Check cache first
-	cachedData, err := redisClient.Get(ctx, cacheKey).Result()
-	if err == nil {
-		// Cache Hit
-		log.Println("Cache hit for user:", userIDStr)
-		var info sellers.BusinessInformation
-		if err := json.Unmarshal([]byte(cachedData), &info); err == nil {
-			c.JSON(http.StatusOK, info)
-			return
-		}
-	}
-    if err != redis.Nil {
-        log.Printf("Redis error (non-Nil) for user %s: %v", userIDStr, err)
+	
+    if redisClient != nil {
+        cacheKey := "business_info:" + userIDStr
+        // 1. Check cache first
+        cachedData, err := redisClient.Get(ctx, cacheKey).Result()
+        if err == nil {
+            // Cache Hit
+            log.Println("Cache hit for user:", userIDStr)
+            var info sellers.BusinessInformation
+            if err := json.Unmarshal([]byte(cachedData), &info); err == nil {
+                c.JSON(http.StatusOK, info)
+                return
+            }
+        }
+        if err != redis.Nil {
+            log.Printf("Redis error (non-Nil) for user %s: %v", userIDStr, err)
+        }
     }
 
 	// 2. Cache Miss: Get from database
 	log.Println("Cache miss for user:", userIDStr)
-	parsedUserID, _ := uuid.Parse(userIDStr)
-	info, err := sellers.GetBusinessInfo(ctx, supabaseClient, parsedUserID)
+	info, err := sellers.GetBusinessInfo(ctx, supabaseClient, userIDStr)
 	if err != nil {
-		if err.Error() == "PGRST116" {
+		if strings.Contains(err.Error(), "PGRST116") { // More robust error check
 			c.JSON(http.StatusNotFound, gin.H{"error": "No business information found for this seller"})
 		} else {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get business information", "details": err.Error()})
@@ -238,16 +271,19 @@ func handleGetBusinessInfo(c *gin.Context) {
 	}
 
 	// 3. Store in cache for next time
-	jsonData, err := json.Marshal(info)
-	if err != nil {
-		log.Printf("Error marshaling business info for caching: %v", err)
-	} else {
-		// Set cache with a 10-minute expiration
-		err := redisClient.Set(ctx, cacheKey, jsonData, 10*time.Minute).Err()
-		if err != nil {
-			log.Printf("Failed to set cache for user %s: %v", userIDStr, err)
-		}
-	}
+    if redisClient != nil {
+        jsonData, err := json.Marshal(info)
+        if err != nil {
+            log.Printf("Error marshaling business info for caching: %v", err)
+        } else {
+            cacheKey := "business_info:" + userIDStr
+            // Set cache with a 10-minute expiration
+            err := redisClient.Set(ctx, cacheKey, jsonData, 10*time.Minute).Err()
+            if err != nil {
+                log.Printf("Failed to set cache for user %s: %v", userIDStr, err)
+            }
+        }
+    }
 
 	c.JSON(http.StatusOK, info)
 }
@@ -256,7 +292,6 @@ func handleUpdateBusinessInfo(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	userIDStr, _ := userID.(string)
     ctx := c.Request.Context()
-	parsedUserID, _ := uuid.Parse(userIDStr)
 
 	var updates map[string]interface{}
 	if err := c.ShouldBindJSON(&updates); err != nil {
@@ -267,16 +302,18 @@ func handleUpdateBusinessInfo(c *gin.Context) {
 	delete(updates, "id")
 	delete(updates, "seller_id")
 
-	updatedInfo, err := sellers.UpdateBusinessInfo(ctx, supabaseClient, parsedUserID, updates)
+	updatedInfo, err := sellers.UpdateBusinessInfo(ctx, supabaseClient, userIDStr, updates)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update business information", "details": err.Error()})
 		return
 	}
 
 	// Invalidate cache on update
-	cacheKey := "business_info:" + userIDStr
-	if err := redisClient.Del(ctx, cacheKey).Err(); err != nil {
-        log.Printf("Failed to invalidate cache for user %s after update: %v", userIDStr, err)
+    if redisClient != nil {
+        cacheKey := "business_info:" + userIDStr
+        if err := redisClient.Del(ctx, cacheKey).Err(); err != nil {
+            log.Printf("Failed to invalidate cache for user %s after update: %v", userIDStr, err)
+        }
     }
 
 	c.JSON(http.StatusOK, updatedInfo)
@@ -286,18 +323,19 @@ func handleDeleteBusinessInfo(c *gin.Context) {
 	userID, _ := c.Get("userID")
 	userIDStr, _ := userID.(string)
     ctx := c.Request.Context()
-	parsedUserID, _ := uuid.Parse(userIDStr)
 
-	err := sellers.DeleteBusinessInfo(ctx, supabaseClient, parsedUserID)
+	err := sellers.DeleteBusinessInfo(ctx, supabaseClient, userIDStr)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete business information", "details": err.Error()})
 		return
 	}
 
 	// Invalidate cache on delete
-	cacheKey := "business_info:" + userIDStr
-    if err := redisClient.Del(ctx, cacheKey).Err(); err != nil {
-        log.Printf("Failed to invalidate cache for user %s after delete: %v", userIDStr, err)
+    if redisClient != nil {
+        cacheKey := "business_info:" + userIDStr
+        if err := redisClient.Del(ctx, cacheKey).Err(); err != nil {
+            log.Printf("Failed to invalidate cache for user %s after delete: %v", userIDStr, err)
+        }
     }
 
 	c.JSON(http.StatusOK, gin.H{"message": "Business information deleted successfully"})

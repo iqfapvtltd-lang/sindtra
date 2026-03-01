@@ -1,23 +1,5 @@
-# Go binaries
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# Firebase service account key
+firebase-service-account.json
 
-# Test binary
-*.test
-
-# IDE-specific files
-.idea/
-.vscode/
-
-# Environment files
-.env
-.env.*
-!.env.example
-.env.local
-
-# Compiled binary from 'go build'
-sindtra
-server
+# Go build executable
+sindhtra-auth-api

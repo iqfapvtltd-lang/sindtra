@@ -1,18 +1,16 @@
-
 package sellers
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
 	supabase "github.com/nedpals/supabase-go"
 )
 
 // BusinessInformation represents a seller's detailed business information.
 type BusinessInformation struct {
 	ID           int64     `json:"id,omitempty"`
-	SellerID     uuid.UUID `json:"seller_id"`
+	SellerID     string `json:"seller_id"`
 	BusinessName string    `json:"business_name,omitempty"`
 	SellerName   string    `json:"seller_name,omitempty"`
 	PANCard      string    `json:"pan_card,omitempty"`
@@ -40,9 +38,9 @@ func AddBusinessInfo(ctx context.Context, client *supabase.Client, infoData map[
 }
 
 // GetBusinessInfo fetches the business information for a given seller ID.
-func GetBusinessInfo(ctx context.Context, client *supabase.Client, sellerID uuid.UUID) (BusinessInformation, error) {
+func GetBusinessInfo(ctx context.Context, client *supabase.Client, sellerID string) (BusinessInformation, error) {
 	var result []BusinessInformation
-	err := client.DB.From("business_information").Select("*").Eq("seller_id", sellerID.String()).Execute(&result)
+	err := client.DB.From("business_information").Select("*").Eq("seller_id", sellerID).Execute(&result)
 	if err != nil {
 		return BusinessInformation{}, fmt.Errorf("failed to get business info: %w", err)
 	}
@@ -53,9 +51,9 @@ func GetBusinessInfo(ctx context.Context, client *supabase.Client, sellerID uuid
 }
 
 // UpdateBusinessInfo updates an existing business information record.
-func UpdateBusinessInfo(ctx context.Context, client *supabase.Client, sellerID uuid.UUID, updates map[string]interface{}) (BusinessInformation, error) {
+func UpdateBusinessInfo(ctx context.Context, client *supabase.Client, sellerID string, updates map[string]interface{}) (BusinessInformation, error) {
 	var results []BusinessInformation
-	err := client.DB.From("business_information").Update(updates).Eq("seller_id", sellerID.String()).Execute(&results)
+	err := client.DB.From("business_information").Update(updates).Eq("seller_id", sellerID).Execute(&results)
 	if err != nil {
 		return BusinessInformation{}, fmt.Errorf("failed to update business info: %w", err)
 	}
@@ -66,9 +64,9 @@ func UpdateBusinessInfo(ctx context.Context, client *supabase.Client, sellerID u
 }
 
 // DeleteBusinessInfo deletes the business information for a seller.
-func DeleteBusinessInfo(ctx context.Context, client *supabase.Client, sellerID uuid.UUID) error {
+func DeleteBusinessInfo(ctx context.Context, client *supabase.Client, sellerID string) error {
 	var results []interface{}
-	err := client.DB.From("business_information").Delete().Eq("seller_id", sellerID.String()).Execute(&results)
+	err := client.DB.From("business_information").Delete().Eq("seller_id", sellerID).Execute(&results)
 	if err != nil {
 		return fmt.Errorf("failed to delete business info: %w", err)
 	}

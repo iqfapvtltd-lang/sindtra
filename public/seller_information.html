@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Seller Profile Form</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f2f2f2; margin: 20px; }
+        .form-container { max-width: 600px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h2 { text-align: center; color: #333; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
+        input[type="text"], select { width: 95%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        .btn { display: block; width: 100%; padding: 10px; background-color: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }
+        .btn:hover { background-color: #0056b3; }
+        #message { margin-top: 15px; text-align: center; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="form-container">
+        <h2>Seller Profile</h2>
+        <p>This is the first step to creating your seller account. This information will be linked to your authenticated user account.</p>
+        <form id="sellerForm">
+            <div class="form-group">
+                <label for="business_name">Business Name</label>
+                <input type="text" id="business_name" name="business_name" placeholder="e.g., Acme Corporation" required>
+            </div>
+            <div class="form-group">
+                <label for="business_type">Business Type</label>
+                <select id="business_type" name="business_type" required>
+                    <option value="">-- Select a Type --</option>
+                    <option value="Sole Proprietorship">Sole Proprietorship</option>
+                    <option value="Partnership">Partnership</option>
+                    <option value="Private Limited">Private Limited Company</option>
+                    <option value="Public Limited">Public Limited Company</option>
+                    <option value="Other">Other</option>
+                </select>
+            </div>
+            <button type="submit" class="btn">Create Seller Profile</button>
+        </form>
+        <div id="message"></div>
+    </div>
+
+    <script>
+        document.getElementById('sellerForm').addEventListener('submit', async function(event) {
+            // Prevent the default form submission (page reload)
+            event.preventDefault();
+
+            const messageDiv = document.getElementById('message');
+            messageDiv.textContent = 'Creating profile...';
+            messageDiv.style.color = 'blue';
+
+            // 1. Get the Firebase ID Token from localStorage
+            const token = localStorage.getItem('firebaseIdToken');
+            if (!token) {
+                messageDiv.textContent = 'Error: You are not logged in! Please log in first.';
+                messageDiv.style.color = 'red';
+                return;
+            }
+
+            // 2. Create a data object from the form
+            const formData = new FormData(this);
+            const data = Object.fromEntries(formData.entries());
+
+            console.log('Submitting to API:', data);
+
+            try {
+                // 3. Send the actual API request to the backend
+                const response = await fetch('/api/sellers', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        // Attach the token for authentication
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (!response.ok) {
+                    // If the server returns an error, show it
+                    throw new Error(result.details || result.error || 'An unknown error occurred.');
+                }
+
+                // 4. Show success message and clear the form
+                messageDiv.textContent = 'Seller profile created successfully! You can now add your business details.';
+                messageDiv.style.color = 'green';
+                console.log('Server response:', result);
+                
+                // Optional: Redirect to the business information page after a short delay
+                setTimeout(() => {
+                    window.location.href = '/public/business_information.html';
+                }, 2000); // 2-second delay
+
+            } catch (error) {
+                // 5. Show any error that occurred during the fetch
+                messageDiv.textContent = `Error: ${error.message}`;
+                messageDiv.style.color = 'red';
+                console.error('Submission error:', error);
+            }
+        });
+    </script>
+</body>
+</html>

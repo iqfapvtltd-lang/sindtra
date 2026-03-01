@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sindtra Dashboard</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background-color: #f0f2f5; margin: 0; }
+        
+        /* Header Styles */
+        .header {
+            background-color: #fff;
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #ddd;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .header .logo { font-size: 1.5em; font-weight: bold; }
+        .header .user-actions button {
+            margin-left: 10px;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        #login-btn { background-color: #007bff; color: white; }
+        #logout-btn { background-color: #dc3545; color: white; }
+        #copy-token-btn { background-color: #17a2b8; color: white; }
+        #user-email { font-weight: bold; color: #333; }
+        
+        /* Main Dashboard Styles */
+        #dashboard-view {
+            display: none; /* Hidden by default */
+            padding: 20px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        .info-card {
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+            padding: 20px;
+            flex: 1;
+            min-width: 300px;
+        }
+        .info-card h2 {
+            margin-top: 0;
+            border-bottom: 2px solid #f0f2f5;
+            padding-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .info-card .action-btn {
+            font-size: 14px;
+            padding: 8px 15px;
+            text-decoration: none;
+            border-radius: 5px;
+            color: white;
+            background-color: #28a745;
+        }
+        .info-card .action-btn.add { background-color: #007bff; }
+        .info-card dl { font-size: 14px; }
+        .info-card dt { font-weight: bold; color: #555; margin-top: 10px; }
+        .info-card dd { margin-left: 0; color: #333; }
+        .info-card .no-data { color: #888; font-style: italic; }
+        
+        #copy-message { display: none; margin-left: 10px; color: green; font-weight: bold; }
+
+    </style>
+</head>
+<body>
+
+    <header class="header">
+        <div class="logo">Sindtra</div>
+        <div id="logged-out-view">
+            <a href="/public/login.html" id="login-btn" class="action-btn">Login</a>
+        </div>
+        <div id="logged-in-view" style="display: none; align-items: center;">
+            <span id="user-email"></span>
+            <button id="copy-token-btn">Copy ID Token</button>
+            <span id="copy-message">Copied!</span>
+            <button id="logout-btn">Logout</button>
+        </div>
+    </header>
+
+    <main id="dashboard-view">
+        <!-- Seller Profile Card -->
+        <div class="info-card" id="seller-card">
+            <h2>
+                <span>Seller Profile</span>
+                <a href="/public/seller_information.html" id="seller-action-btn" class="action-btn">Loading...</a>
+            </h2>
+            <div id="seller-data">
+                <p class="no-data">Loading profile...</p>
+            </div>
+        </div>
+
+        <!-- Business Information Card -->
+        <div class="info-card" id="business-card">
+            <h2>
+                <span>Business Information</span>
+                <a href="/public/business_information.html" id="business-action-btn" class="action-btn">Loading...</a>
+            </h2>
+            <div id="business-data">
+                <p class="no-data">Loading business info...</p>
+            </div>
+        </div>
+    </main>
+    
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <script>
+        // Your web app's Firebase configuration
+        const firebaseConfig = {
+          apiKey: "AIzaSyAVcRGALSKDRJSmjWrTYdYzDZSfNkVQ5-g",
+          authDomain: "studio-7733152914-843b5.firebaseapp.com",
+          projectId: "studio-7733152914-843b5",
+          storageBucket: "studio-7733152914-843b5.firebasestorage.app",
+          messagingSenderId: "532841815005",
+          appId: "1:532841815005:web:053c90a884842948dbb434"
+        };
+
+        // Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+
+        // DOM Elements
+        const loggedInView = document.getElementById('logged-in-view');
+        const loggedOutView = document.getElementById('logged-out-view');
+        const dashboardView = document.getElementById('dashboard-view');
+        const userEmailSpan = document.getElementById('user-email');
+        const logoutBtn = document.getElementById('logout-btn');
+        const copyTokenBtn = document.getElementById('copy-token-btn');
+        const copyMessage = document.getElementById('copy-message');
+
+        // Card Elements
+        const sellerCardData = document.getElementById('seller-data');
+        const sellerActionButton = document.getElementById('seller-action-btn');
+        const businessCardData = document.getElementById('business-data');
+        const businessActionButton = document.getElementById('business-action-btn');
+
+        // --- Main Auth Logic ---
+        auth.onAuthStateChanged(async (user) => {
+            if (user) {
+                // User is signed in
+                loggedInView.style.display = 'flex';
+                loggedOutView.style.display = 'none';
+                dashboardView.style.display = 'flex';
+                userEmailSpan.textContent = user.email;
+
+                const token = await user.getIdToken(true);
+                localStorage.setItem('firebaseIdToken', token);
+                
+                // Fetch data for both cards
+                fetchSellerProfile(token);
+                fetchBusinessInfo(token);
+
+            } else {
+                // User is signed out
+                loggedInView.style.display = 'none';
+                loggedOutView.style.display = 'block';
+                dashboardView.style.display = 'none';
+                localStorage.removeItem('firebaseIdToken');
+            }
+        });
+
+        // --- Data Fetching Functions ---
+        const fetchSellerProfile = async (token) => {
+            try {
+                const response = await fetch('/api/sellers/', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (response.status === 404) {
+                    sellerCardData.innerHTML = '<p class="no-data">No Seller Profile found. Please add your information.</p>';
+                    sellerActionButton.textContent = 'Add Seller Info';
+                    sellerActionButton.classList.add('add');
+                } else if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                } else {
+                    const data = await response.json();
+                    sellerCardData.innerHTML = `
+                        <dl>
+                            <dt>Business Name</dt><dd>${data.business_name || 'N/A'}</dd>
+                            <dt>Business Type</dt><dd>${data.business_type || 'N/A'}</dd>
+                        </dl>
+                    `;
+                    sellerActionButton.textContent = 'Update Seller Info';
+                    sellerActionButton.classList.remove('add');
+                }
+            } catch (error) {
+                sellerCardData.innerHTML = `<p class="no-data" style="color: red;">Error fetching profile: ${error.message}</p>`;
+                console.error("Fetch Seller Profile Error:", error);
+            }
+        };
+
+        const fetchBusinessInfo = async (token) => {
+            try {
+                const response = await fetch('/api/sellers/business-information/', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+
+                if (response.status === 404) {
+                    businessCardData.innerHTML = '<p class="no-data">No Business Information found. Please add your details.</p>';
+                    businessActionButton.textContent = 'Add Business Info';
+                    businessActionButton.classList.add('add');
+                } else if (!response.ok) {
+                    throw new Error(`Server error: ${response.status}`);
+                } else {
+                    const data = await response.json();
+                    businessCardData.innerHTML = `
+                        <dl>
+                            <dt>Official Business Name</dt><dd>${data.business_name || 'N/A'}</dd>
+                            <dt>Seller Name</dt><dd>${data.seller_name || 'N/A'}</dd>
+                            <dt>PAN Card</dt><dd>${data.pan_card || 'N/A'}</dd>
+                            <dt>GSTIN</dt><dd>${data.gstin_no || 'N/A'}</dd>
+                            <dt>Address</dt><dd>${data.address}, ${data.city}, ${data.state} - ${data.pin_code}</dd>
+                            <dt>Country</dt><dd>${data.country || 'N/A'}</dd>
+                            <dt>Website</dt><dd>${data.website_url ? `<a href="${data.website_url}" target="_blank">${data.website_url}</a>` : 'N/A'}</dd>
+                             <dt>Profile Created On</dt><dd>${new Date(data.created_at).toLocaleDateString()}</dd>
+                        </dl>
+                    `;
+                    businessActionButton.textContent = 'Update Business Info';
+                    businessActionButton.classList.remove('add');
+                }
+            } catch (error) {
+                businessCardData.innerHTML = `<p class="no-data" style="color: red;">Error fetching business info: ${error.message}</p>`;
+                console.error("Fetch Business Info Error:", error);
+            }
+        };
+
+        // --- Event Listeners ---
+        logoutBtn.addEventListener('click', () => auth.signOut());
+
+        copyTokenBtn.addEventListener('click', () => {
+            const token = localStorage.getItem('firebaseIdToken');
+            if (token) {
+                navigator.clipboard.writeText(token).then(() => {
+                    copyMessage.style.display = 'inline';
+                    setTimeout(() => { copyMessage.style.display = 'none'; }, 2000);
+                });
+            }
+        });
+
+    </script>
+</body>
+</html>
